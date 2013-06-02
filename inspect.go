@@ -38,7 +38,6 @@ func (d dummyRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-//
 func panicIfUnassignable(field reflect.StructField, assignable reflect.Type, panicMsg string) {
 	fType := field.Type
 	if assignable == fType || assignable.AssignableTo(fType) {
@@ -96,11 +95,11 @@ func init() {
 // according to documentation, exactly one of the two is non-nil.
 // If rows is non nil, it is returned and err is ignored.
 // If both are nil, an internal error is returned.
-func inspectRow(row *sql.Row) (*sql.Rows, error) {
+func sqlRowsFromSqlRow(row *sql.Row) (*sql.Rows, error) {
 	if row == nil {
 		return nil, errArgNil
 	}
-	derefRow := reflect.ValueOf(*row)
+	derefRow := reflect.ValueOf(row).Elem()
 	innerRows := derefRow.Field(rowRowsIdx)
 	if innerRows.CanInterface() && !innerRows.IsNil() {
 		if rows, ok := innerRows.Interface().(*sql.Rows); ok {
@@ -121,7 +120,7 @@ func inspectRow(row *sql.Row) (*sql.Rows, error) {
 
 // return rowsi from sql/*Rows;
 // return an error if the argument or rowsi is nil or can't be read.
-func inspectRows(rows *sql.Rows) (driver.Rows, error) {
+func driverRowsFromSqlRows(rows *sql.Rows) (driver.Rows, error) {
 	if rows == nil {
 		return nil, errArgNil
 	}
@@ -135,6 +134,8 @@ func inspectRows(rows *sql.Rows) (driver.Rows, error) {
 	return nil, errRowsRowsiNil
 }
 
+// Inspect uses reflect to extract a driver.Driver from sql.Row or sql.Rows.
+// This can be used by a driver to work around issue 5606 in legacy versions.
 func Inspect(sqlStruct interface{}) (interface{}, error) {
 	if sqlStruct == nil {
 		return nil, errArgNil
@@ -143,7 +144,7 @@ func Inspect(sqlStruct interface{}) (interface{}, error) {
 	switch v := sqlStruct.(type) {
 	case *sql.Row:
 		var err error
-		rows, err = inspectRow(v)
+		rows, err = sqlRowsFromSqlRow(v)
 		if err != nil {
 			return nil, err
 		}
@@ -152,5 +153,5 @@ func Inspect(sqlStruct interface{}) (interface{}, error) {
 	default:
 		return errArgWrongType, nil
 	}
-	return inspectRows(rows)
+	return driverRowsFromSqlRows(rows)
 }

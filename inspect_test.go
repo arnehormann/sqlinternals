@@ -8,7 +8,8 @@ import (
 )
 
 type omnithing struct {
-	rows *testRows
+	numInputs int
+	rows      *testRows
 }
 
 func (t *omnithing) Close() error { return nil }
@@ -25,7 +26,7 @@ func (t *omnithing) Commit() error   { return nil }
 func (t *omnithing) Rollback() error { return nil }
 
 // driver.Stmt
-func (t *omnithing) NumInput() int                                   { return 0 }
+func (t *omnithing) NumInput() int                                   { return t.numInputs }
 func (t *omnithing) Exec(args []driver.Value) (driver.Result, error) { return t, nil }
 func (t *omnithing) Query(args []driver.Value) (driver.Rows, error)  { return t.rows, nil }
 
@@ -71,14 +72,16 @@ func init() {
 	sql.Register(driverType, tester)
 }
 
-func setRows(rows *testRows) {
-	tester.rows = rows
+// set to the new values, return the old ones (enables double-defer trickery for reset after use)
+func (t *omnithing) setState(inputs int, rows *testRows) (int, *testRows) {
+	oldInputs, oldRows := t.numInputs, t.rows
+	t.numInputs, t.rows = inputs, rows
+	return oldInputs, oldRows
 }
 
-func runRowsTest(t *testing.T, querier func(conn *sql.DB) (interface{}, error)) {
+func runRowsTest(t *testing.T, inputs int, querier func(conn *sql.DB) (interface{}, error)) {
 	// set intial state and restore it after usage
-	defer setRows(tester.rows)
-	tester.rows = &testRows{text: "data"}
+	defer tester.setState(tester.setState(inputs, &testRows{text: "data"}))
 	// run a query, retrieve *sql.Rows
 	conn, err := sql.Open(driverType, "")
 	defer conn.Close()
@@ -96,25 +99,25 @@ func runRowsTest(t *testing.T, querier func(conn *sql.DB) (interface{}, error)) 
 }
 
 func TestRowWithoutArgs(t *testing.T) {
-	runRowsTest(t, func(conn *sql.DB) (interface{}, error) {
+	runRowsTest(t, 0, func(conn *sql.DB) (interface{}, error) {
 		return conn.QueryRow("SELECT 1"), nil
 	})
 }
 
 func TestRowWithArgs(t *testing.T) {
-	runRowsTest(t, func(conn *sql.DB) (interface{}, error) {
+	runRowsTest(t, 1, func(conn *sql.DB) (interface{}, error) {
 		return conn.QueryRow("SELECT ?", 1), nil
 	})
 }
 
 func TestRowsWithoutArgs(t *testing.T) {
-	runRowsTest(t, func(conn *sql.DB) (interface{}, error) {
+	runRowsTest(t, 0, func(conn *sql.DB) (interface{}, error) {
 		return conn.Query("SELECT 1")
 	})
 }
 
 func TestRowsWithArgs(t *testing.T) {
-	runRowsTest(t, func(conn *sql.DB) (interface{}, error) {
+	runRowsTest(t, 1, func(conn *sql.DB) (interface{}, error) {
 		return conn.Query("SELECT ?", 1)
 	})
 }
