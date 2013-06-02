@@ -144,7 +144,7 @@ func driverRowsFromSqlRows(rows *sql.Rows) (driver.Rows, error) {
 	return nil, errRowsRowsiNil
 }
 
-// Inspect extracts the internal driver.Driver from sql.Row or sql.Rows.
+// Inspect extracts the internal driver.Rows from sql.Row or sql.Rows.
 // This can be used by a driver to work around issue 5606 in legacy versions.
 func Inspect(sqlStruct interface{}) (interface{}, error) {
 	if sqlStruct == nil {
