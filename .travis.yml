@@ -1,4 +1,4 @@
 language: go
-script: go test
+script: go get github.com/arnehormann/sqlinternals && go test
 notifications:
   email: false
