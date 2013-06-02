@@ -3,23 +3,34 @@ package sqlinternals
 import (
 	"database/sql"
 	"database/sql/driver"
-	"errors"
-	"fmt"
 	"reflect"
 )
 
 var (
-	// field indices for faster reflect access
-	rowErrIdx       int
-	rowRowsIdx      int
-	rowsRowsiIdx    int
-	errArgNil       = errors.New("argument must not be nil")
-	errArgWrongType = errors.New("argument was not *sql.Row or *sql.Rows")
-	errRowRows      = errors.New("'rows *sql.Rows' in sql.Row could not be read")
-	errRowErr       = errors.New("'err error' in sql.Row could not be read")
-	errRowErrNil    = errors.New("'err error' in sql.Row is nil")
-	errRowsRowsi    = errors.New("'rowsi driver.Rows' in sql.Rows could not be read")
-	errRowsRowsiNil = errors.New("'rowsi driver.Rows' in sql.Rows is nil")
+	// field indices for faster reflect access. Types are also checked
+	rowErrIdx    int // database/sql/Row.err: error
+	rowRowsIdx   int // database/sql/Row.rows: database/sql/*Rows
+	rowsRowsiIdx int // database/sql/Rows.rowsi: database/sql/driver/Rows
+)
+
+// internal error type
+// Used instead of import "errors" for two reasons:
+// - is used nowhere else, making it a good template for an AssignableTo assertion
+// - can be used in const
+type internalErr string
+
+func (e internalErr) Error() string {
+	return string(e)
+}
+
+const (
+	errArgNil       = internalErr("argument must not be nil")
+	errArgWrongType = internalErr("argument was not *sql.Row or *sql.Rows")
+	errRowRows      = internalErr("'rows *sql.Rows' in sql.Row could not be read")
+	errRowErr       = internalErr("'err error' in sql.Row could not be read")
+	errRowErrNil    = internalErr("'err error' in sql.Row is nil")
+	errRowsRowsi    = internalErr("'rowsi driver.Rows' in sql.Rows could not be read")
+	errRowsRowsiNil = internalErr("'rowsi driver.Rows' in sql.Rows is nil")
 )
 
 // a driver.Rows implementatiton so we are able
@@ -38,14 +49,13 @@ func (d dummyRows) Next(dest []driver.Value) error {
 	return nil
 }
 
+// basic type assertion, panic on error
 func panicIfUnassignable(field reflect.StructField, assignable reflect.Type, panicMsg string) {
 	fType := field.Type
 	if assignable == fType || assignable.AssignableTo(fType) {
 		return
 	}
-	msg := fmt.Sprintf("%s; %v is not assignable to %v",
-		panicMsg, assignable.String(), fType.String())
-	panic(msg)
+	panic(panicMsg + "; " + assignable.String() + " is not assignable to " + fType.String())
 }
 
 func init() {
@@ -54,7 +64,7 @@ func init() {
 		tRow        reflect.Type = reflect.TypeOf(sql.Row{})
 		tRows       reflect.Type = reflect.TypeOf(sql.Rows{})
 		tRowsPtr    reflect.Type = reflect.TypeOf(&sql.Rows{})
-		tErr        reflect.Type = reflect.TypeOf(errors.New(""))
+		tErr        reflect.Type = reflect.TypeOf(errArgNil)
 		tDriverRows reflect.Type = reflect.TypeOf((driver.Rows)(dummyRows{}))
 	)
 	var i, expectFields, fields int
