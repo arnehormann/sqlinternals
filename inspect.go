@@ -4,13 +4,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"reflect"
+	"unsafe"
 )
 
 var (
-	// field indices for faster reflect access. Types are also checked
-	rowErrIdx    int // database/sql/Row.err: error
-	rowRowsIdx   int // database/sql/Row.rows: database/sql/*Rows
-	rowsRowsiIdx int // database/sql/Rows.rowsi: database/sql/driver/Rows
+	// field offsets for unsafe access (types are checked beforehand)
+	offsetRowRows   uintptr // database/sql/Row.rows: database/sql/*Rows
+	offsetRowsRowsi uintptr // database/sql/Rows.rowsi: database/sql/driver/Rows
 )
 
 // internal error type
@@ -27,8 +27,7 @@ const (
 	errArgNil       = internalErr("argument must not be nil")
 	errArgWrongType = internalErr("argument was not *sql.Row or *sql.Rows")
 	errRowRows      = internalErr("'rows *sql.Rows' in sql.Row could not be read")
-	errRowErr       = internalErr("'err error' in sql.Row could not be read")
-	errRowErrNil    = internalErr("'err error' in sql.Row is nil")
+	errRowRowsNil   = internalErr("'err' xor 'rows' in sql.Row must be nil")
 	errRowsRowsi    = internalErr("'rowsi driver.Rows' in sql.Rows could not be read")
 	errRowsRowsiNil = internalErr("'rowsi driver.Rows' in sql.Rows is nil")
 )
@@ -64,23 +63,17 @@ func init() {
 		tRow        reflect.Type = reflect.TypeOf(sql.Row{})
 		tRows       reflect.Type = reflect.TypeOf(sql.Rows{})
 		tRowsPtr    reflect.Type = reflect.TypeOf(&sql.Rows{})
-		tErr        reflect.Type = reflect.TypeOf(errArgNil)
 		tDriverRows reflect.Type = reflect.TypeOf((driver.Rows)(dummyRows{}))
 	)
 	var i, expectFields, fields int
-	// sql.Row must have fields "rows sql/*Rows" and "err error"
-	for i, expectFields, fields = 0, 2, tRow.NumField(); i < fields; i++ {
+	// sql.Row must have a field "rows sql/*Rows"
+	for i, expectFields, fields = 0, 1, tRow.NumField(); i < fields; i++ {
 		field := tRow.Field(i)
 		switch field.Name {
-		case "err":
-			panicIfUnassignable(field, tErr,
-				"database/sql/Row.err is not error")
-			rowErrIdx = i
-			expectFields--
 		case "rows":
 			panicIfUnassignable(field, tRowsPtr,
 				"database/sql/Row.rows is not database/sql/*Rows")
-			rowRowsIdx = i
+			offsetRowRows = field.Offset
 			expectFields--
 		}
 	}
@@ -92,7 +85,7 @@ func init() {
 		if field := tRows.Field(i); field.Name == "rowsi" {
 			panicIfUnassignable(field, tDriverRows,
 				"database/sql/Rows.rowsi is not database/sql/driver/Rows")
-			rowsRowsiIdx = i
+			offsetRowsRowsi = field.Offset
 			expectFields--
 		}
 	}
@@ -101,47 +94,34 @@ func init() {
 	}
 }
 
-// return rows and err from from sql/*Row;
-// according to documentation, exactly one of the two is non-nil.
-// If rows is non nil, it is returned and err is ignored.
-// If both are nil, an internal error is returned.
+// return rows from sql/*Row, if row or row.rows is nil, an error is returned.
+// Has to use unsafe to access unexported fields, but it's robust:
+// we checked the types and structure in init.
 func sqlRowsFromSqlRow(row *sql.Row) (*sql.Rows, error) {
 	if row == nil {
 		return nil, errArgNil
 	}
-	derefRow := reflect.ValueOf(row).Elem()
-	innerRows := derefRow.Field(rowRowsIdx)
-	if innerRows.CanInterface() && !innerRows.IsNil() {
-		if rows, ok := innerRows.Interface().(*sql.Rows); ok {
-			return rows, nil
-		}
-		return nil, errRowRows
+	rowsPtr := (uintptr)((unsafe.Pointer)(row)) + offsetRowRows
+	rows := *(**sql.Rows)((unsafe.Pointer)(rowsPtr))
+	if rows == nil {
+		return nil, errRowRowsNil
 	}
-	rowErr := derefRow.Field(rowErrIdx)
-	if !rowErr.CanInterface() {
-		return nil, errRowErr
-	}
-	if err, ok := rowErr.Interface().(error); ok && err != nil {
-		// return error from sql.Row.err
-		return nil, err
-	}
-	return nil, errRowErrNil
+	return rows, nil
 }
 
-// return rowsi from sql/*Rows;
-// return an error if the argument or rowsi is nil or can't be read.
+// return rowsi from sql/*Rows, if rows or rows.rowsi is nil an error is returned.
+// Has to use unsafe to access unexported fields, but it's robust:
+// we checked the types and structure in init.
 func driverRowsFromSqlRows(rows *sql.Rows) (driver.Rows, error) {
 	if rows == nil {
 		return nil, errArgNil
 	}
-	driverRows := reflect.ValueOf(*rows).Field(rowsRowsiIdx)
-	if !driverRows.CanInterface() {
+	rowsiPtr := offsetRowsRowsi + (uintptr)((unsafe.Pointer)(rows))
+	if rowsiPtr == 0 {
 		return nil, errRowsRowsi
 	}
-	if result, ok := driverRows.Interface().(driver.Rows); ok && result != nil {
-		return result, nil
-	}
-	return nil, errRowsRowsiNil
+	rowsi := *(*driver.Rows)((unsafe.Pointer)(rowsiPtr))
+	return rowsi, nil
 }
 
 // Inspect extracts the internal driver.Rows from sql.Row or sql.Rows.
