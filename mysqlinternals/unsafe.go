@@ -1,8 +1,17 @@
+// sqlinternals for github.com/go-sql-driver/mysql - retrieve column metadata from sql.*Row / sql.*Rows
+//
+// Copyright 2013 Arne Hormann. All rights reserved.
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this file,
+// You can obtain one at http://mozilla.org/MPL/2.0/.
+
 package mysqlinternals
 
 import (
 	"database/sql/driver"
 	"github.com/arnehormann/sqlinternals"
+	"github.com/arnehormann/sqlinternals/mirror"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -100,52 +109,6 @@ var (
 	structsChecked bool
 )
 
-// check possibility to convert a struct to another with unsafe.Pointer
-func canConvertUnsafe(from, to reflect.Type, recurseStructs int) bool {
-	//fmt.Printf("CHECK:\n -\t%s\n -\t%s\n", from, to)
-	if from.Kind() != reflect.Struct || from.Kind() != to.Kind() ||
-		from.Name() != to.Name() || from.NumField() != to.NumField() {
-		return false
-	}
-	for i, max := 0, from.NumField(); i < max; i++ {
-		sf, tf := from.Field(i), to.Field(i)
-		//fmt.Printf("checking [%d]:\n\t%s: %v\n\t%s: %v\n", i, sf.Name, sf.Type, tf.Name, tf.Type)
-		if sf.Name != tf.Name || sf.Offset != tf.Offset {
-			return false
-		}
-		tsf, ttf := sf.Type, tf.Type
-		for done := false; !done; {
-			k := tsf.Kind()
-			if k != ttf.Kind() {
-				return false
-			}
-			//fmt.Printf("\t->\t%s %s == %s %s\n", tsf, tsf.Kind(), ttf, ttf.Kind())
-			switch k {
-			case reflect.Array, reflect.Chan, reflect.Map, reflect.Ptr, reflect.Slice:
-				tsf, ttf = tsf.Elem(), ttf.Elem()
-			case reflect.Interface:
-				// don't have to handle matching interfaces here
-				if tsf != ttf {
-					// there are none in our case, so we are extra strict
-					return false
-				}
-			case reflect.Struct:
-				if recurseStructs <= 0 && tsf.Name() != ttf.Name() {
-					return false
-				}
-				done = true
-			default:
-				done = true
-			}
-		}
-		if recurseStructs > 0 && !canConvertUnsafe(tsf, ttf, recurseStructs-1) {
-			return false
-		}
-	}
-	//fmt.Printf("CHECK - are castable\n")
-	return true
-}
-
 func initOffsets(rows driver.Rows) (bool, error) {
 	// make sure mysqlRows is the right type (full certainty is impossible).
 	if rows == nil {
@@ -160,7 +123,7 @@ func initOffsets(rows driver.Rows) (bool, error) {
 		return false, errUnexpectedType
 	}
 	// compare mysqlRows
-	if !canConvertUnsafe(elemType, reflect.TypeOf(mysqlRows{}), 0) {
+	if !mirror.CanConvertUnsafe(elemType, reflect.TypeOf(mysqlRows{}), 0) {
 		return false, errUnexpectedStruct
 	}
 	colsField, ok := elemType.FieldByName("columns")
@@ -168,7 +131,7 @@ func initOffsets(rows driver.Rows) (bool, error) {
 		return false, errUnexpectedStruct
 	}
 	// compare mysqlField
-	if !canConvertUnsafe(colsField.Type.Elem(), reflect.TypeOf(mysqlField{}), 0) {
+	if !mirror.CanConvertUnsafe(colsField.Type.Elem(), reflect.TypeOf(mysqlField{}), 0) {
 		return false, errUnexpectedStruct
 	}
 	return true, nil

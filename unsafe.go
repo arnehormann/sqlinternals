@@ -1,3 +1,11 @@
+// sqlinternals - retrieve driver.Rows from sql.*Row / sql.*Rows
+//
+// Copyright 2013 Arne Hormann. All rights reserved.
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this file,
+// You can obtain one at http://mozilla.org/MPL/2.0/.
+
 package sqlinternals
 
 import (
@@ -9,8 +17,8 @@ import (
 
 var (
 	// field offsets for unsafe access (types are checked beforehand)
-	offsetRowRows   uintptr // database/sql/Row.rows: database/sql/*Rows
-	offsetRowsRowsi uintptr // database/sql/Rows.rowsi: database/sql/driver/Rows
+	offsetRowRows   uintptr // sql.Row.rows: sql.*Rows
+	offsetRowsRowsi uintptr // sql.Rows.rowsi: driver.Rows
 )
 
 // internal error type
@@ -61,7 +69,7 @@ func init() {
 		tDriverRows reflect.Type = reflect.TypeOf((driver.Rows)(dummyRows{}))
 	)
 	var i, expectFields, fields int
-	// sql.Row must have a field "rows sql/*Rows"
+	// sql.Row must have a field "rows sql.*Rows"
 	for i, expectFields, fields = 0, 1, tRow.NumField(); i < fields; i++ {
 		field := tRow.Field(i)
 		switch field.Name {
@@ -75,7 +83,7 @@ func init() {
 	if expectFields != 0 {
 		panic("unexpected structure of database/sql/Row")
 	}
-	// sql.Rows must have a field "rowsi driver/Rows"
+	// sql.Rows must have a field "rowsi driver.Rows"
 	for i, expectFields, fields = 0, 1, tRows.NumField(); i < fields; i++ {
 		if field := tRows.Field(i); field.Name == "rowsi" {
 			panicIfUnassignable(field, tDriverRows,
@@ -89,7 +97,7 @@ func init() {
 	}
 }
 
-// Inspect extracts the internal driver.Rows from sql.Row or sql.Rows.
+// Inspect extracts the internal driver.Rows from sql.*Row or sql.*Rows.
 // This can be used by a driver to work around issue 5606 in Go until a better way exists.
 func Inspect(sqlStruct interface{}) (interface{}, error) {
 	// All of this has to use unsafe to access unexported fields, but it's robust:
@@ -112,7 +120,7 @@ func Inspect(sqlStruct interface{}) (interface{}, error) {
 	default:
 		return errArgWrongType, nil
 	}
-	// return rowsi from sql/*Rows, if rows.rowsi is nil an error is returned.
+	// return rowsi from sql.*Rows, if rows.rowsi is nil an error is returned.
 	rowsiPtr := offsetRowsRowsi + (uintptr)((unsafe.Pointer)(rows))
 	rowsi := *(*driver.Rows)((unsafe.Pointer)(rowsiPtr))
 	if rowsi == nil {
