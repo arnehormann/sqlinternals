@@ -1,3 +1,4 @@
 language: go
+script: go test ./...; go get -u github.com/go-sql-driver/mysql && go test ./mysql/...
 notifications:
   email: false

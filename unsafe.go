@@ -90,7 +90,7 @@ func init() {
 }
 
 // Inspect extracts the internal driver.Rows from sql.Row or sql.Rows.
-// This can be used by a driver to work around issue 5606 in legacy versions.
+// This can be used by a driver to work around issue 5606 in Go until a better way exists.
 func Inspect(sqlStruct interface{}) (interface{}, error) {
 	// All of this has to use unsafe to access unexported fields, but it's robust:
 	// we checked the types and structure in init.
