@@ -8,38 +8,68 @@ import (
 	"time"
 )
 
+// Column represents the column of a MySQL result.
+// The methods below postfixed with (*) return information for MySQL internal flags.
+// Please note that I can't say if these are to be trusted (esp. IsNotNull), they come directly from MySQL.
+// At least for SCHEMA information, MySQL can be untrustworthy and I don't know if it's different with results.
 type Column interface {
 
 	// mysql.name
 
+	// Name returns the column name, matching that of a call to Columns() in database/sql
 	Name() string
 
 	// derived from mysqlField.fieldType
 
+	// MysqlType returns the raw sql type name without parameters and modifiers
 	MysqlType() string
+	// IsNumber returns true if the column contains numbers (one of integer, decimal or floating point)
 	IsNumber() bool
+	// IsInteger returns true if the column contains integers
 	IsInteger() bool
+	// IsFloatingPoint returns true if the column contains floating point numbers
 	IsFloatingPoint() bool
+	// IsDecimal returns true if the column contains decimal numbers
 	IsDecimal() bool
+	// IsText returns true if the column contains textual data
 	IsText() bool
+	// IsBlob returns true if the column contains binary blobs
 	IsBlob() bool
+	// IsTime returns true if the column contains temporal data
 	IsTime() bool
 
 	// derived from mysqlField.flags
+	// TODO: not quite sure about these, add tests and check them.
 
+	// IsPrimaryKey returns true if the column is marked as part of a primary key (*).
 	IsPrimaryKey() bool
+	// IsUniqueKey returns true if the column is marked as part of a unique key (*).
 	IsUniqueKey() bool
+	// IsMultipleKey returns true if the column is marked as part of a regular key (*).
 	IsMultipleKey() bool
+	// IsNotNull returns true if the column is marked as NOT NULL (*).
 	IsNotNull() bool
+	// IsUnsigned returns true if the column is marked as UNSIGNED (*).
 	IsUnsigned() bool
+	// IsZerofill returns true if the column is marked as ZEROFILL (*).
 	IsZerofill() bool
+	// IsBinary returns true if the column is marked as BINARY (*).
 	IsBinary() bool
+	// IsAutoIncrement returns true if the column is marked as AUTO_INCREMENT (*).
 	IsAutoIncrement() bool
 
 	// derived from mysqlField.fieldType and mysqlField.flags
+
+	// MysqlParameters returns the category of parameters the SQL type expects in MysqlDeclaration.
 	MysqlParameters() parameterType
+	// MysqlDeclaration returns a type declaration usable in a CREATE TABLE statement.
 	MysqlDeclaration(params ...interface{}) (string, error)
+	// ReflectType returns a Go type able to contain the SQL type.
+	// The returned types assume a non-NULL value and may cause problems
+	// on conversion (e.g. MySQL DATE "0000-00-00", which is not mappable to Go).
 	ReflectType() (reflect.Type, error)
+
+	// TODO: add MapsCleanlyTo or somesuch for cases like date mentioned above
 }
 
 var _ Column = mysqlField{}
