@@ -3,12 +3,16 @@ package mysqlinternals
 import (
 	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
-	"io"
 	"os"
+	"reflect"
 	"testing"
 )
 
 var dsn string
+
+type Scanner interface {
+	Scan(values ...interface{}) error
+}
 
 func init() {
 	if envdsn := os.Getenv("MYSQL_DSN"); envdsn != "" {
@@ -18,67 +22,126 @@ func init() {
 	}
 }
 
-func getColumns(t *testing.T, querier func(db *sql.DB) (interface{}, error)) []Column {
+func testRow(t *testing.T, test typeTest, useQueryRow bool) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	rowOrRows, err := querier(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if closer, ok := rowOrRows.(io.Closer); ok {
-		defer closer.Close()
-	}
 	// check that it is accessible and matches the one in tester.rows
-	columns, err := Columns(rowOrRows)
+	var source Scanner
+	var cols []Column
+	switch {
+	case useQueryRow:
+		var row *sql.Row
+		row, err = db.QueryRow(test.query, test.queryArgs...), nil
+		if err != nil {
+			break
+		}
+		source = row
+	case !useQueryRow:
+		var rows *sql.Rows
+		rows, err = db.Query(test.query, test.queryArgs...)
+		if err != nil {
+			break
+		}
+		defer rows.Close()
+		source = rows
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	return columns
+	cols, err = Columns(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	col := cols[0]
+	decl, derr := col.MysqlDeclaration(test.sqlDeclParams...)
+	if test.sqlTypeError && derr == nil {
+		t.Errorf("SQL: expected an error in MysqlDeclaration\n")
+	}
+	if !test.sqlTypeError && derr != nil {
+		t.Errorf("SQL: did not expect an error in MysqlDeclaration, got '%v'\n", derr)
+	}
+	if decl != test.sqlType {
+		t.Errorf("SQL: type '%s' did not match expected '%s'\n", decl, test.sqlType)
+	}
+	refl, rerr := col.ReflectType()
+	if test.goTypeError && rerr == nil {
+		t.Errorf("Go: expected an error in ReflectType\n")
+	}
+	if !test.goTypeError && rerr != nil {
+		t.Errorf("Go: did not expect an error in ReflectType, got '%v'\n", rerr)
+	}
+	if refl != test.goType {
+		t.Errorf("Go: type '%s' did not match expected '%s'\n", refl, test.goType)
+	}
+	if test.hasValue {
+		if rows, ok := source.(*sql.Rows); ok && !rows.Next() {
+			t.Error("could not scan from sql.Rows")
+		}
+		err = source.Scan(&test.receiver)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		eVal := reflect.ValueOf(test.expectedValue)
+		rVal := reflect.ValueOf(test.receiver)
+		if eVal.Type() != rVal.Type() {
+			t.Errorf("types of expected (%s) and received (%s) values didn't match\n",
+				eVal.Type(), rVal.Type())
+		}
+		// TODO: compare value and assignability
+	}
 }
 
-func testRow(t *testing.T, test typeTest, querySingleRow bool) {
-	var cols []Column
-	if querySingleRow {
-		cols = getColumns(t, func(db *sql.DB) (interface{}, error) {
-			return db.QueryRow(test.query, test.queryArgs...), nil
-		})
-	} else {
-		cols = getColumns(t, func(db *sql.DB) (interface{}, error) {
-			return db.Query(test.query, test.queryArgs...)
-		})
-	}
-	var _ = cols // so go doesn't nag me
-	// check cols
-	// ...
+func args(v ...interface{}) []interface{} {
+	return v
 }
 
 type typeTest struct {
 	id            string
 	query         string
 	queryArgs     []interface{}
-	compareVals   func(a, b interface{}) bool
+	sqlType       string
 	sqlDeclParams []interface{}
-	goVal         interface{}
-	goTypeError   bool
 	sqlTypeError  bool
+	goType        reflect.Type
+	goTypeError   bool
+	hasValue      bool
+	expectedValue interface{}
+	receiver      interface{}
 }
 
 func TestRows(t *testing.T) {
-	//expected := []typeTest{}
-	// ...
-	// experimental trash below, first getting Travis to accept & test this
-	cols := getColumns(t, func(db *sql.DB) (interface{}, error) {
-		return db.Query("SELECT CAST('0000-00-00' as DATE)")
-	})
-	if len(cols) != 1 {
-		t.Fatal("wrong col length")
+	testSetups := []typeTest{
+		typeTest{
+			id:            "select string (text mode)",
+			query:         "select 'Hi'",
+			sqlType:       "VARCHAR(2) NOT NULL",
+			sqlDeclParams: args(2),
+			sqlTypeError:  false,
+			goType:        reflect.TypeOf(""),
+			goTypeError:   false,
+			hasValue:      true,
+			expectedValue: []byte("Hi"),
+		},
+		typeTest{
+			id:            "select string (binary mode)",
+			query:         "select ?",
+			queryArgs:     args("Hi"),
+			sqlType:       "CHAR(2) NOT NULL",
+			sqlDeclParams: args(2),
+			sqlTypeError:  false,
+			goType:        reflect.TypeOf(""),
+			goTypeError:   false,
+			hasValue:      true,
+			expectedValue: []byte("Hi"),
+		},
+		// TODO: add more tests (many columns, NULL column, different types...)
 	}
-	// for experimentation, not done yet
-	col := cols[0]
-	decl, derr := col.MysqlDeclaration()
-	refl, rerr := col.ReflectType()
-	t.Errorf("[%v] GO(%s) <-> SQL(%s) [%v]", rerr, refl, decl, derr)
+	for _, setup := range testSetups {
+		testRow(t, setup, false)
+	}
 }
