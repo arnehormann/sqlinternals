@@ -39,20 +39,20 @@ func getColumns(t *testing.T, querier func(db *sql.DB) (interface{}, error)) []C
 	return columns
 }
 
-func testRow(t *testing.Test, test typeTest, querySingleRow bool) {
+func testRow(t *testing.T, test typeTest, querySingleRow bool) {
 	var cols []Column
 	if querySingleRow {
 		cols = getColumns(t, func(db *sql.DB) (interface{}, error) {
-			return db.QueryRows(test.query, test.queryArgs...), nil
+			return db.QueryRow(test.query, test.queryArgs...), nil
 		})
 	} else {
 		cols = getColumns(t, func(db *sql.DB) (interface{}, error) {
 			return db.Query(test.query, test.queryArgs...)
 		})
 	}
-	decl, derr := col.MysqlDeclaration(test.sqlDeclParams...)
-	refl, rerr := col.ReflectType()
-
+	var _ = cols // so go doesn't nag me
+	// check cols
+	// ...
 }
 
 type typeTest struct {
@@ -67,8 +67,10 @@ type typeTest struct {
 }
 
 func TestRows(t *testing.T) {
-	expected := []expect{}
-	cols := runRowsTest(t, func(db *sql.DB) (interface{}, error) {
+	//expected := []typeTest{}
+	// ...
+	// experimental trash below, first getting Travis to accept & test this
+	cols := getColumns(t, func(db *sql.DB) (interface{}, error) {
 		return db.Query("SELECT CAST('0000-00-00' as DATE)")
 	})
 	if len(cols) != 1 {
