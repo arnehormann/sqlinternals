@@ -8,4 +8,4 @@ This has to use **unsafe**, so it can't be used in some contexts.
 
 Documentation lives at [godoc.org](http://godoc.org/github.com/arnehormann/sqlinternals/mysqlinternals).
 
-License: [MPL2](http://github.com/arnehormann/sqlinternals/LICENSE.md).
+License: [MPL2](https://github.com/arnehormann/sqlinternals/blob/master/LICENSE.md).

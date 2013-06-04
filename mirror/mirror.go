@@ -9,8 +9,15 @@
 package mirror
 
 import (
+	//"fmt"
 	"reflect"
 )
+
+// TODO: add variants or configurability:
+// - check only offsets of matching named fields (so _ [x]byte padding is allowed)
+// - don't check type names
+// - ignore names for anonymous structs
+// - extract logging into another function (common walk struct function?)
 
 // CanConvertUnsafe returns true if the memory layout and the struct field names of
 // 'from' matches those of 'to'. 'from' and 'to' are interchangeable, the test is bidirectional.

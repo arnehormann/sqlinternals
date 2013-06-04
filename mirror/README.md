@@ -6,4 +6,4 @@ This allows for a safe and easy way to get unexported data.
 
 Documentation lives at [godoc.org](http://godoc.org/github.com/arnehormann/sqlinternals/mirror).
 
-License: [MPL2](http://github.com/arnehormann/sqlinternals/LICENSE.md).
+License: [MPL2](https://github.com/arnehormann/sqlinternals/blob/master/LICENSE.md).
