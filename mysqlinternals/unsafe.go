@@ -10,8 +10,8 @@ package mysqlinternals
 
 import (
 	"database/sql/driver"
+	"github.com/arnehormann/mirror"
 	"github.com/arnehormann/sqlinternals"
-	"github.com/arnehormann/sqlinternals/mirror"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -123,7 +123,7 @@ func initOffsets(rows driver.Rows) (bool, error) {
 		return false, errUnexpectedType
 	}
 	// compare mysqlRows
-	if !mirror.CanConvertUnsafe(elemType, reflect.TypeOf(mysqlRows{}), 0) {
+	if !mirror.CanConvert(elemType, reflect.TypeOf(mysqlRows{})) {
 		return false, errUnexpectedStruct
 	}
 	colsField, ok := elemType.FieldByName("columns")
@@ -131,7 +131,7 @@ func initOffsets(rows driver.Rows) (bool, error) {
 		return false, errUnexpectedStruct
 	}
 	// compare mysqlField
-	if !mirror.CanConvertUnsafe(colsField.Type.Elem(), reflect.TypeOf(mysqlField{}), 0) {
+	if !mirror.CanConvert(colsField.Type.Elem(), reflect.TypeOf(mysqlField{})) {
 		return false, errUnexpectedStruct
 	}
 	return true, nil
