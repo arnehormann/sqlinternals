@@ -3,6 +3,7 @@ notifications:
   email: false
 
 install:
+  - go get github.com/arnehormann/mirror
   - go get github.com/go-sql-driver/mysql
 
 before_script:
