@@ -17,7 +17,8 @@ import (
 
 type omnithing struct {
 	numInputs int
-	rows      *testRows
+	columns   []string
+	rows      [][]interface{}
 }
 
 func (t *omnithing) Close() error { return nil }
@@ -36,96 +37,111 @@ func (t *omnithing) Rollback() error { return nil }
 // driver.Stmt
 func (t *omnithing) NumInput() int                                   { return t.numInputs }
 func (t *omnithing) Exec(args []driver.Value) (driver.Result, error) { return t, nil }
-func (t *omnithing) Query(args []driver.Value) (driver.Rows, error)  { return t.rows, nil }
+func (t *omnithing) Query(args []driver.Value) (driver.Rows, error)  { return t, nil }
 
 // driver.Result
 func (t *omnithing) LastInsertId() (int64, error) { return 0, nil }
 func (t *omnithing) RowsAffected() (int64, error) { return 0, nil }
 
-type testRows struct {
-	text string
-}
-
 // driver.Rows
-func (t *testRows) Close() error {
-	return nil
-}
-
-func (t *testRows) Columns() []string {
-	return []string{"testcol"}
-}
-
-func (t *testRows) Next(dest []driver.Value) error {
-	if t.text == "" {
+func (t *omnithing) Columns() []string { return t.columns }
+func (t *omnithing) Next(dest []driver.Value) error {
+	if len(t.rows) == 0 {
 		return io.EOF
 	}
-	dest[0] = t.text
+	var row []interface{}
+	row, t.rows = t.rows[0], t.rows[1:]
+	for i, v := range row {
+		dest[i] = v
+	}
 	return nil
 }
 
+func (o *omnithing) setDB(numInputs int, columns []string, cells ...interface{}) *omnithing {
+	o.numInputs = numInputs
+	o.columns = columns
+	numCols, numCells := len(columns), len(cells)
+	numRows := numCells / numCols
+	if numCols*numRows != numCells {
+		panic("wrong number of cells")
+	}
+	rows := [][]interface{}{}
+	for r := 0; r < numRows; r++ {
+		cols := []interface{}{}
+		for c := 0; c < numCols; c++ {
+			cols = append(cols, cells[r*numCols+c])
+		}
+		rows = append(rows, cols)
+	}
+	o.rows = rows
+	return o
+}
+
+type querier func(conn *sql.DB) (interface{}, error)
+
 var (
-	tester = &omnithing{}
-	// make sure the test types implement the interfaces
-	_ driver.Driver = tester
-	_ driver.Conn   = tester
-	_ driver.Tx     = tester
-	_ driver.Stmt   = tester
-	_ driver.Result = tester
-	_ driver.Rows   = &testRows{}
+	testdriver = &omnithing{}
+	// make sure the test type implements the interfaces
+	_ driver.Driver = testdriver
+	_ driver.Conn   = testdriver
+	_ driver.Tx     = testdriver
+	_ driver.Stmt   = testdriver
+	_ driver.Result = testdriver
+	_ driver.Rows   = testdriver
 )
 
 const driverType = "test"
 
 func init() {
-	sql.Register(driverType, tester)
+	sql.Register(driverType, testdriver)
 }
 
-// set to the new values, return the old ones (enables double-defer trickery for reset after use)
-func (t *omnithing) setState(inputs int, rows *testRows) (int, *testRows) {
-	oldInputs, oldRows := t.numInputs, t.rows
-	t.numInputs, t.rows = inputs, rows
-	return oldInputs, oldRows
-}
-
-func runRowsTest(t *testing.T, inputs int, querier func(conn *sql.DB) (interface{}, error)) {
-	// set intial state and restore it after usage
-	defer tester.setState(tester.setState(inputs, &testRows{text: "data"}))
+func runRowsTest(t *testing.T, query querier, numInputs int, columns []string, cells ...interface{}) {
+	// set intial state before usage
+	testdriver.setDB(numInputs, columns, cells...)
 	// run a query, retrieve *sql.Rows
 	conn, err := sql.Open(driverType, "")
 	defer conn.Close()
-	rowOrRows, err := querier(conn)
+	rowOrRows, err := query(conn)
 	if closer, ok := rowOrRows.(io.Closer); ok {
 		defer closer.Close()
 	}
-	// check that it is accessible and matches the one in tester.rows
+	// check that it is accessible and matches the one in testdriver.rows
 	unwrapped, err := Inspect(rowOrRows)
 	if err != nil {
 		t.Error(err)
-	} else if myrows, ok := unwrapped.(*testRows); !ok || myrows != tester.rows {
+		return
+	}
+	myrows, ok := unwrapped.(*omnithing)
+	if !ok || myrows != testdriver {
 		t.Errorf("returned driver.Rows must match those passed in.")
 	}
 }
 
 func TestRowWithoutArgs(t *testing.T) {
-	runRowsTest(t, 0, func(conn *sql.DB) (interface{}, error) {
-		return conn.QueryRow("SELECT 1"), nil
-	})
+	query := func(conn *sql.DB) (interface{}, error) {
+		return conn.QueryRow(`SELECT "test"`), nil
+	}
+	runRowsTest(t, query, 0, []string{"header"}, "test")
 }
 
 func TestRowWithArgs(t *testing.T) {
-	runRowsTest(t, 1, func(conn *sql.DB) (interface{}, error) {
-		return conn.QueryRow("SELECT ?", 1), nil
-	})
+	query := func(conn *sql.DB) (interface{}, error) {
+		return conn.QueryRow(`SELECT ?`, "test"), nil
+	}
+	runRowsTest(t, query, 1, []string{"header"}, "test")
 }
 
 func TestRowsWithoutArgs(t *testing.T) {
-	runRowsTest(t, 0, func(conn *sql.DB) (interface{}, error) {
-		return conn.Query("SELECT 1")
-	})
+	query := func(conn *sql.DB) (interface{}, error) {
+		return conn.Query(`SELECT "test"`)
+	}
+	runRowsTest(t, query, 0, []string{"header"}, "test")
 }
 
 func TestRowsWithArgs(t *testing.T) {
-	runRowsTest(t, 1, func(conn *sql.DB) (interface{}, error) {
-		return conn.Query("SELECT ?", 1)
-	})
+	query := func(conn *sql.DB) (interface{}, error) {
+		return conn.Query(`SELECT ?`, "test")
+	}
+	runRowsTest(t, query, 1, []string{"header"}, "test")
 }
