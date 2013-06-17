@@ -9,8 +9,10 @@
 package mysqlinternals
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"math/big"
 	"reflect"
 	"time"
@@ -72,10 +74,14 @@ type Column interface {
 	MysqlParameters() parameterType
 	// MysqlDeclaration returns a type declaration usable in a CREATE TABLE statement.
 	MysqlDeclaration(params ...interface{}) (string, error)
-	// ReflectType returns a Go type able to contain the SQL type.
+	// ReflectGoType returns the smallest Go type able to represent all possible regular values.
 	// The returned types assume a non-NULL value and may cause problems
 	// on conversion (e.g. MySQL DATE "0000-00-00", which is not mappable to Go).
-	ReflectType() (reflect.Type, error)
+	ReflectGoType() (reflect.Type, error)
+	// ReflectSqlType returns a Go type able to contain the SQL type, including null values.
+	// The returned types may cause problems on conversion
+	// (e.g. MySQL DATE "0000-00-00", which is not mappable to Go).
+	ReflectSqlType() (reflect.Type, error)
 
 	// TODO: add MapsCleanlyTo or somesuch for cases like date mentioned above
 }
@@ -203,37 +209,37 @@ const ( // base for reflection
 	reflect_float32 = float32(0)
 	reflect_float64 = float64(0)
 	reflect_string  = ""
-)
-
-var ( // reflect.Types
-	reflect_bigint = big.NewInt(0)
-	reflect_bools  = []bool{}
-	reflect_bytes  = []byte{}
-	reflect_time   = time.Time{}
 	// possible indicators for NULL, SET, ENUM, GEOMETRY?
 	// reflect_empty   = struct{}{}
 	// reflect_many    = []interface{}{}
+)
 
-	typeUint8   = reflect.TypeOf(reflect_uint8)
-	typeUint16  = reflect.TypeOf(reflect_uint16)
-	typeUint32  = reflect.TypeOf(reflect_uint32)
-	typeUint64  = reflect.TypeOf(reflect_uint64)
-	typeInt8    = reflect.TypeOf(reflect_int8)
-	typeInt16   = reflect.TypeOf(reflect_int16)
-	typeInt32   = reflect.TypeOf(reflect_int32)
-	typeInt64   = reflect.TypeOf(reflect_int64)
-	typeFloat32 = reflect.TypeOf(reflect_float32)
-	typeFloat64 = reflect.TypeOf(reflect_float64)
-	typeBigint  = reflect.TypeOf(reflect_bigint)
-	typeBools   = reflect.TypeOf(reflect_bools)
-	typeBytes   = reflect.TypeOf(reflect_bytes)
-	typeString  = reflect.TypeOf(reflect_string)
-	typeTime    = reflect.TypeOf(reflect_time)
+var ( // reflect.Types
+	typeUint8       = reflect.TypeOf(reflect_uint8)
+	typeUint16      = reflect.TypeOf(reflect_uint16)
+	typeUint32      = reflect.TypeOf(reflect_uint32)
+	typeUint64      = reflect.TypeOf(reflect_uint64)
+	typeInt8        = reflect.TypeOf(reflect_int8)
+	typeInt16       = reflect.TypeOf(reflect_int16)
+	typeInt32       = reflect.TypeOf(reflect_int32)
+	typeInt64       = reflect.TypeOf(reflect_int64)
+	typeFloat32     = reflect.TypeOf(reflect_float32)
+	typeFloat64     = reflect.TypeOf(reflect_float64)
+	typeString      = reflect.TypeOf(reflect_string)
+	typeBigint      = reflect.TypeOf(big.NewInt(0))
+	typeBools       = reflect.TypeOf([]bool{})
+	typeBytes       = reflect.TypeOf([]byte{})
+	typeTime        = reflect.TypeOf(time.Time{})
+	typeNullBool    = reflect.TypeOf(sql.NullBool{})
+	typeNullInt64   = reflect.TypeOf(sql.NullInt64{})
+	typeNullFloat64 = reflect.TypeOf(sql.NullFloat64{})
+	typeNullString  = reflect.TypeOf(sql.NullString{})
+	typeNullTime    = reflect.TypeOf(mysql.NullTime{})
 )
 
 // retrieve the best matching reflect.Type for the mysql field.
 // Returns an error if no matching type exists.
-func (f mysqlField) ReflectType() (reflect.Type, error) {
+func (f mysqlField) ReflectGoType() (reflect.Type, error) {
 	if f.IsUnsigned() {
 		switch f.fieldType {
 		case fieldTypeTiny:
@@ -274,6 +280,27 @@ func (f mysqlField) ReflectType() (reflect.Type, error) {
 		return nil, errorTypeMismatch(f.fieldType)
 	}
 	return nil, errors.New("unknown mysql type")
+}
+
+// retrieve the best matching reflect.Type for the mysql field.
+// Returns an error if no matching type exists.
+func (f mysqlField) ReflectSqlType() (reflect.Type, error) {
+	if !f.IsNotNull() {
+		switch f.fieldType {
+		case fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeLong, fieldTypeLongLong:
+			return typeNullInt64, nil
+		case fieldTypeFloat, fieldTypeDouble:
+			return typeNullFloat64, nil
+		case fieldTypeYear, fieldTypeDate, fieldTypeNewDate, fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime:
+			return typeNullTime, nil
+		case fieldTypeVarChar, fieldTypeVarString, fieldTypeString:
+			return typeNullString, nil
+		case fieldTypeDecimal, fieldTypeNewDecimal,
+			fieldTypeEnum, fieldTypeSet, fieldTypeGeometry, fieldTypeNULL:
+			return nil, errorTypeMismatch(f.fieldType)
+		}
+	}
+	return f.ReflectGoType()
 }
 
 type errorTypeMismatch uint8
