@@ -75,7 +75,7 @@ func testRow(t *testing.T, test typeTest, useQueryRow bool) {
 	if decl != test.sqlType {
 		t.Errorf("SQL: type '%s' did not match expected '%s'\n", decl, test.sqlType)
 	}
-	refl, rerr := col.ReflectType()
+	refl, rerr := col.ReflectGoType()
 	if test.goTypeError && rerr == nil {
 		t.Errorf("Go: expected an error in ReflectType\n")
 	}
