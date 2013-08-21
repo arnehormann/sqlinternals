@@ -20,8 +20,8 @@ import (
 
 // Column represents the column of a MySQL result.
 // The methods below postfixed with (*) return information for MySQL internal flags.
-// Please note that I can't say if these are to be trusted (esp. IsNotNull), they come directly from MySQL.
-// At least for SCHEMA information, MySQL can be untrustworthy and I don't know if it's different with results.
+// Please note that I can't say if these are trustworthy (esp. IsNotNull), they come directly from MySQL.
+// At least for SCHEMA information, MySQL can report false metadata, I don't know if this is different for results.
 type Column interface {
 
 	// mysql.name
@@ -81,9 +81,9 @@ type Column interface {
 	// ReflectSqlType returns a Go type able to contain the SQL type, including null values.
 	// The returned types may cause problems on conversion
 	// (e.g. MySQL DATE "0000-00-00", which is not mappable to Go).
-	ReflectSqlType() (reflect.Type, error)
-
-	// TODO: add MapsCleanlyTo or somesuch for cases like date mentioned above
+	// The returned type assumes IsNotNull() to be false when forceNullable is set
+	// and attempts to return a nullable type (e.g. sql.NullString instead of string).
+	ReflectSqlType(forceNullable bool) (reflect.Type, error)
 }
 
 var _ Column = mysqlField{}
@@ -215,26 +215,30 @@ const ( // base for reflection
 )
 
 var ( // reflect.Types
-	typeUint8       = reflect.TypeOf(reflect_uint8)
-	typeUint16      = reflect.TypeOf(reflect_uint16)
-	typeUint32      = reflect.TypeOf(reflect_uint32)
-	typeUint64      = reflect.TypeOf(reflect_uint64)
-	typeInt8        = reflect.TypeOf(reflect_int8)
-	typeInt16       = reflect.TypeOf(reflect_int16)
-	typeInt32       = reflect.TypeOf(reflect_int32)
-	typeInt64       = reflect.TypeOf(reflect_int64)
-	typeFloat32     = reflect.TypeOf(reflect_float32)
-	typeFloat64     = reflect.TypeOf(reflect_float64)
-	typeString      = reflect.TypeOf(reflect_string)
-	typeBigint      = reflect.TypeOf(big.NewInt(0))
-	typeBools       = reflect.TypeOf([]bool{})
-	typeBytes       = reflect.TypeOf([]byte{})
-	typeTime        = reflect.TypeOf(time.Time{})
-	typeNullBool    = reflect.TypeOf(sql.NullBool{})
+	// non-null types
+	typeUint8   = reflect.TypeOf(reflect_uint8)
+	typeUint16  = reflect.TypeOf(reflect_uint16)
+	typeUint32  = reflect.TypeOf(reflect_uint32)
+	typeUint64  = reflect.TypeOf(reflect_uint64)
+	typeInt8    = reflect.TypeOf(reflect_int8)
+	typeInt16   = reflect.TypeOf(reflect_int16)
+	typeInt32   = reflect.TypeOf(reflect_int32)
+	typeInt64   = reflect.TypeOf(reflect_int64)
+	typeFloat32 = reflect.TypeOf(reflect_float32)
+	typeFloat64 = reflect.TypeOf(reflect_float64)
+	typeString  = reflect.TypeOf(reflect_string)
+	typeBigint  = reflect.TypeOf(big.NewInt(0))
+	typeBools   = reflect.TypeOf([]bool{})
+	typeBytes   = reflect.TypeOf([]byte{})
+	typeTime    = reflect.TypeOf(time.Time{})
+	// nullable types
 	typeNullInt64   = reflect.TypeOf(sql.NullInt64{})
 	typeNullFloat64 = reflect.TypeOf(sql.NullFloat64{})
 	typeNullString  = reflect.TypeOf(sql.NullString{})
 	typeNullTime    = reflect.TypeOf(mysql.NullTime{})
+	// typeNullBool doesn't match in MySQL, boolean is (unsigned?) tinyint(1),
+	// it may have more than 2 states
+	//typeNullBool = reflect.TypeOf(sql.NullBool{})
 )
 
 // retrieve the best matching reflect.Type for the mysql field.
@@ -284,21 +288,22 @@ func (f mysqlField) ReflectGoType() (reflect.Type, error) {
 
 // retrieve the best matching reflect.Type for the mysql field.
 // Returns an error if no matching type exists.
-func (f mysqlField) ReflectSqlType() (reflect.Type, error) {
-	if !f.IsNotNull() {
-		switch f.fieldType {
-		case fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeLong, fieldTypeLongLong:
-			return typeNullInt64, nil
-		case fieldTypeFloat, fieldTypeDouble:
-			return typeNullFloat64, nil
-		case fieldTypeYear, fieldTypeDate, fieldTypeNewDate, fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime:
-			return typeNullTime, nil
-		case fieldTypeVarChar, fieldTypeVarString, fieldTypeString:
-			return typeNullString, nil
-		case fieldTypeDecimal, fieldTypeNewDecimal,
-			fieldTypeEnum, fieldTypeSet, fieldTypeGeometry, fieldTypeNULL:
-			return nil, errorTypeMismatch(f.fieldType)
+func (f mysqlField) ReflectSqlType(forceNullable bool) (reflect.Type, error) {
+	if forceNullable || !f.IsNotNull() {
+		switch {
+		case f.IsInteger():
+			return typeNullInt64
+		case f.IsFloatingPoint():
+			return typeNullFloat64
+		case f.IsText():
+			return typeNullString
+		case f.IsTime():
+			return typeNullTime
+		case f.IsBlob():
+			return typeBytes // []byte can be nil on its own
 		}
+		// All other types are not nullable in Go right now
+		return nil, errorTypeMismatch(f.fieldType)
 	}
 	return f.ReflectGoType()
 }
@@ -428,12 +433,12 @@ func (p paramErr) Error() string {
 
 // mysql type declaration
 // The declaration includes the type and size and the attributes "NOT NULL", "ZEROFILL" and "BINARY".
-// It does not include name, character sets, collations, default value, keys or auto_increment.
-// For BIT, *INT*, CHAR and BINARY types, args is optional and may be one int: length
+// It does not include the name, character sets, collations, default value, keys or the attribute auto_increment.
+// For BIT, all INT types, CHAR and BINARY types, args is optional and may be one int: length.
 // For VARCHAR and VARBINARY types, args must be one int: length.
 // For DECIMAL and NUMERIC types, it should be up two ints: length and decimals (precision and scale in MySQL docs).
 // For FLOAT, DOUBLE and REAL floating point types, it is optional and, when given, must be two ints: length and decimals.
-// For SETs and ENUMs, it specifies the possible values
+// For SETs and ENUMs, it specifies the possible values.
 // For all other types, args must be empty.
 func (f mysqlField) MysqlDeclaration(args ...interface{}) (string, error) {
 	const (
