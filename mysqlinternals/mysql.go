@@ -292,15 +292,15 @@ func (f mysqlField) ReflectSqlType(forceNullable bool) (reflect.Type, error) {
 	if forceNullable || !f.IsNotNull() {
 		switch {
 		case f.IsInteger():
-			return typeNullInt64
+			return typeNullInt64, nil
 		case f.IsFloatingPoint():
-			return typeNullFloat64
+			return typeNullFloat64, nil
 		case f.IsText():
-			return typeNullString
+			return typeNullString, nil
 		case f.IsTime():
-			return typeNullTime
+			return typeNullTime, nil
 		case f.IsBlob():
-			return typeBytes // []byte can be nil on its own
+			return typeBytes, nil // []byte can be nil on its own
 		}
 		// All other types are not nullable in Go right now
 		return nil, errorTypeMismatch(f.fieldType)
