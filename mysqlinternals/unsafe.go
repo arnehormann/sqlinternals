@@ -73,16 +73,16 @@ const (
 
 // keep mysqlRows and mysqlField in sync with structs in github.com/go-sql-driver/rows.go
 type mysqlField struct {
-        fieldType byte
-        flags     fieldFlag
-        name      string
+	fieldType byte
+	flags     fieldFlag
+	name      string
 }
 
 type mysqlRows struct {
-        mc      *mysqlConn
-        columns []mysqlField
-        binary  bool
-        eof     bool
+	mc      *mysqlConn
+	columns []mysqlField
+	binary  bool
+	eof     bool
 }
 
 // dummy for mysqlRows
@@ -96,10 +96,8 @@ func (e mysqlError) Error() string {
 }
 
 const (
-	errUnexpectedType        = mysqlError("wrong argument, must be *mysql.mysqlRows")
-	errUnexpectedStruct      = mysqlError("could not access cols []mysql.mysqlField")
-	errUnexpectedFieldStruct = mysqlError("could not access field in mysql.mysqlField")
-	errUnavailable           = mysqlError("Fields is not available")
+	errUnexpectedNil  = mysqlError("wrong argument, rows must not be nil")
+	errUnexpectedType = mysqlError("wrong argument, must be *mysql.mysqlRows")
 )
 
 var (
@@ -109,38 +107,43 @@ var (
 	structsChecked bool
 )
 
-func initOffsets(rows driver.Rows) (bool, error) {
+func initOffsets(rows driver.Rows) error {
+	const (
+		errRowsMismatch  = mysqlError("unexpected structure of mysqlRows")
+		errFieldMismatch = mysqlError("unexpected structure of mysqlField")
+	)
 	// make sure mysqlRows is the right type (full certainty is impossible).
 	if rows == nil {
-		return false, nil
+		return errUnexpectedNil
 	}
 	argType := reflect.TypeOf(rows)
 	if argType.Kind() != reflect.Ptr {
-		return false, errUnexpectedType
+		return errUnexpectedType
 	}
 	elemType := argType.Elem()
 	if elemType.Kind() != reflect.Struct || elemType.Name() != "mysqlRows" {
-		return false, errUnexpectedType
+		return errUnexpectedType
 	}
 	// compare mysqlRows
 	if !mirror.CanConvert(elemType, reflect.TypeOf(mysqlRows{})) {
-		return false, errUnexpectedStruct
+		return errRowsMismatch
 	}
 	colsField, ok := elemType.FieldByName("columns")
 	if !ok {
-		return false, errUnexpectedStruct
+		return errRowsMismatch
 	}
 	// compare mysqlField
 	if !mirror.CanConvert(colsField.Type.Elem(), reflect.TypeOf(mysqlField{})) {
-		return false, errUnexpectedStruct
+		return errFieldMismatch
 	}
-	return true, nil
+	return nil
 }
 
 // Columns retrieves a []Column for sql.Rows or sql.Row with type inspection abilities.
 // The field indices match those of a call to Columns().
 // Returns an error if the argument is not sql.Rows or sql.Row based on github.com/go-sql-driver/mysql.
 func Columns(rowOrRows interface{}) ([]Column, error) {
+	const errUnavailable = mysqlError("Columns is not available")
 	if rowOrRows == nil {
 		return nil, errUnavailable
 	}
@@ -159,22 +162,20 @@ func Columns(rowOrRows interface{}) ([]Column, error) {
 		// the first goroutine entering the mutex passed a struct belonging to another driver.
 		// But even then, it will recover on subsequent calls.
 		initMutex.Lock()
+		defer initMutex.Unlock()
 		if !failedInit {
-			initialized, err := initOffsets(dRows)
-			switch {
-			case initialized:
+			switch err = initOffsets(dRows); err {
+			case nil:
 				structsChecked = true
 				uninitialized = false
-			case err != errUnexpectedType:
+			case errUnexpectedType, errUnexpectedNil:
+				return nil, errUnavailable
+			default:
 				failedInit = true
+				return nil, err
 			}
 		}
-		initMutex.Unlock()
-		if uninitialized {
-			return nil, errUnavailable
-		}
 	}
-
 	cols := (*mysqlRows)((unsafe.Pointer)(reflect.ValueOf(dRows).Pointer())).columns
 	columns := make([]Column, len(cols))
 	for i, c := range cols {
