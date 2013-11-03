@@ -83,6 +83,10 @@ type mysqlRows struct {
 	columns []mysqlField
 }
 
+type rowEmbedder struct {
+	mysqlRows
+}
+
 // dummy for mysqlRows
 type mysqlConn struct{}
 
@@ -107,8 +111,9 @@ var (
 
 func initOffsets(rows driver.Rows) error {
 	const (
-		errRowsMismatch  = mysqlError("unexpected structure of mysqlRows")
-		errFieldMismatch = mysqlError("unexpected structure of mysqlField")
+		errWrapperMismatch = mysqlError("unexpected structure of textRows or binaryRows")
+		errRowsMismatch    = mysqlError("unexpected structure of mysqlRows")
+		errFieldMismatch   = mysqlError("unexpected structure of mysqlField")
 	)
 	// make sure mysqlRows is the right type (full certainty is impossible).
 	if rows == nil {
@@ -119,9 +124,22 @@ func initOffsets(rows driver.Rows) error {
 		return errUnexpectedType
 	}
 	elemType := argType.Elem()
-	if elemType.Kind() != reflect.Struct || elemType.Name() != "mysqlRows" {
+	if elemType.Kind() != reflect.Struct {
 		return errUnexpectedType
 	}
+	switch typeName := elemType.Name(); typeName {
+	case "textRows", "binaryRows":
+	default:
+		return errUnexpectedType
+	}
+	if elemType.NumField() != 1 {
+		return errWrapperMismatch
+	}
+	embedded := elemType.Field(0)
+	if embedded.Name != "mysqlRows" {
+		return errWrapperMismatch
+	}
+	elemType = embedded.Type
 	// compare mysqlRows
 	if !mirror.CanConvert(elemType, reflect.TypeOf(mysqlRows{})) {
 		return errRowsMismatch
