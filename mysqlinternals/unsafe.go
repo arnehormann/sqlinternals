@@ -81,8 +81,6 @@ type mysqlField struct {
 type mysqlRows struct {
 	mc      *mysqlConn
 	columns []mysqlField
-	binary  bool
-	eof     bool
 }
 
 // dummy for mysqlRows
