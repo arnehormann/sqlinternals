@@ -155,28 +155,20 @@ func initOffsets(rows driver.Rows) error {
 	return nil
 }
 
-// Columns retrieves a []Column for sql.Rows or sql.Row with type inspection abilities.
-// The field indices match those of a call to Columns().
-// Returns an error if the argument is not sql.Rows or sql.Row based on github.com/go-sql-driver/mysql.
-func Columns(rowOrRows interface{}) ([]Column, error) {
-	const errUnavailable = mysqlError("Columns is not available")
-	if rowOrRows == nil {
-		return nil, errUnavailable
+func driverRows(rowOrRows interface{}) (driver.Rows, bool) {
+	if rowOrRows == nil || failedInit {
+		return nil, false
 	}
 	rows, err := sqlinternals.Inspect(rowOrRows)
 	if err != nil || rows == nil {
-		return nil, errUnavailable
+		return nil, false
 	}
 	dRows, ok := rows.(driver.Rows)
 	if !ok {
-		return nil, errUnavailable
+		return nil, false
 	}
 	if uninitialized := !structsChecked; uninitialized {
-		// The logic in this can fail, but it is faster for the common case.
-		// The failure would be caused when more than one goroutine access
-		// Columns for the very first time and initOffset fails because
-		// the first goroutine entering the mutex passed a struct belonging to another driver.
-		// But even then, it will recover on subsequent calls.
+		ok = true
 		initMutex.Lock()
 		defer initMutex.Unlock()
 		if !failedInit {
@@ -185,12 +177,45 @@ func Columns(rowOrRows interface{}) ([]Column, error) {
 				structsChecked = true
 				uninitialized = false
 			case errUnexpectedType, errUnexpectedNil:
-				return nil, errUnavailable
+				ok = false
 			default:
 				failedInit = true
-				return nil, err
+				ok = false
+			}
+			if !ok {
+				return nil, false
 			}
 		}
+	}
+	return dRows, true
+}
+
+// IsBinary reports whether the row value was retrieved using the binary protocol.
+//
+// MySQL results retrieved with prepared statements or Query with additional arguments
+// use the binary protocol. The results are typed, the driver will use the closest
+// matching Go type.
+// A plain Query call with only the query itself will not use the binary protocol but the
+// text protocol. The results are all strings in that case.
+func IsBinary(rowOrRows interface{}) (bool, error) {
+	const errUnavailable = mysqlError("IsBinary is not available")
+	dRows, ok := driverRows(rowOrRows)
+	if !ok {
+		return false, errUnavailable
+	}
+	argType := reflect.TypeOf(dRows)
+	return "binaryRows" == argType.Elem().Name(), nil
+}
+
+// Columns retrieves a []Column for sql.Rows or sql.Row with type inspection abilities.
+//
+// The field indices match those of a call to Columns().
+// Returns an error if the argument is not sql.Rows or sql.Row based on github.com/go-sql-driver/mysql.
+func Columns(rowOrRows interface{}) ([]Column, error) {
+	const errUnavailable = mysqlError("Columns is not available")
+	dRows, ok := driverRows(rowOrRows)
+	if !ok {
+		return nil, errUnavailable
 	}
 	cols := (*mysqlRows)((unsafe.Pointer)(reflect.ValueOf(dRows).Pointer())).columns
 	columns := make([]Column, len(cols))

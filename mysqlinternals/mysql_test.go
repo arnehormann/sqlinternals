@@ -153,3 +153,29 @@ func TestRows(t *testing.T) {
 		testRow(t, setup, false)
 	}
 }
+
+func TestIsBinary(t *testing.T) {
+	tests := []struct {
+		result bool
+		query  string
+		args   []interface{}
+	}{
+		{result: false, query: "SELECT 1"},
+		{result: true, query: "SELECT ?", args: args(1)},
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, setup := range tests {
+		rows, err := db.Query(setup.query, setup.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		if bin, err := IsBinary(rows); err != nil || bin != setup.result {
+			t.Errorf("test %#v failed", setup)
+		}
+	}
+}
