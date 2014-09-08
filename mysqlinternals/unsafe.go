@@ -10,11 +10,13 @@ package mysqlinternals
 
 import (
 	"database/sql/driver"
-	"github.com/arnehormann/mirror"
-	"github.com/arnehormann/sqlinternals"
+	"fmt"
 	"reflect"
 	"sync"
 	"unsafe"
+
+	"github.com/arnehormann/mirror"
+	"github.com/arnehormann/sqlinternals"
 )
 
 // keep in sync with github.com/go-sql-driver/mysql/const.go
@@ -73,15 +75,18 @@ const (
 
 // keep mysqlRows and mysqlField in sync with structs in github.com/go-sql-driver/rows.go
 type mysqlField struct {
-	fieldType byte
-	flags     fieldFlag
 	name      string
+	flags     fieldFlag
+	fieldType byte
+	decimals  byte
 }
 
 type mysqlRows struct {
 	mc      *mysqlConn
 	columns []mysqlField
 }
+
+type emptyRows struct{}
 
 type rowEmbedder struct {
 	mysqlRows
@@ -100,6 +105,9 @@ func (e mysqlError) Error() string {
 const (
 	errUnexpectedNil  = mysqlError("wrong argument, rows must not be nil")
 	errUnexpectedType = mysqlError("wrong argument, must be *mysql.mysqlRows")
+	rowtypeBinary     = "binaryRows"
+	rowtypeText       = "textRows"
+	rowtypeEmpty      = "emptyRows"
 )
 
 var (
@@ -128,7 +136,7 @@ func initOffsets(rows driver.Rows) error {
 		return errUnexpectedType
 	}
 	switch typeName := elemType.Name(); typeName {
-	case "textRows", "binaryRows":
+	case rowtypeBinary, rowtypeText:
 	default:
 		return errUnexpectedType
 	}
@@ -150,6 +158,7 @@ func initOffsets(rows driver.Rows) error {
 	}
 	// compare mysqlField
 	if !mirror.CanConvert(colsField.Type.Elem(), reflect.TypeOf(mysqlField{})) {
+		fmt.Printf("=> %#v\n\n", reflect.Zero(colsField.Type.Elem()).Interface())
 		return errFieldMismatch
 	}
 	return nil
@@ -204,7 +213,7 @@ func IsBinary(rowOrRows interface{}) (bool, error) {
 		return false, errUnavailable
 	}
 	argType := reflect.TypeOf(dRows)
-	return "binaryRows" == argType.Elem().Name(), nil
+	return rowtypeBinary == argType.Elem().Name(), nil
 }
 
 // Columns retrieves a []Column for sql.Rows or sql.Row with type inspection abilities.
@@ -216,6 +225,9 @@ func Columns(rowOrRows interface{}) ([]Column, error) {
 	dRows, ok := driverRows(rowOrRows)
 	if !ok {
 		return nil, errUnavailable
+	}
+	if rowtypeEmpty == reflect.TypeOf(dRows).Name() {
+		return nil, nil
 	}
 	cols := (*mysqlRows)((unsafe.Pointer)(reflect.ValueOf(dRows).Pointer())).columns
 	columns := make([]Column, len(cols))

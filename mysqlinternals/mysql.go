@@ -12,10 +12,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/go-sql-driver/mysql"
 	"math/big"
 	"reflect"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 // Column represents the column of a MySQL result.
@@ -67,6 +68,9 @@ type Column interface {
 	IsBinary() bool
 	// IsAutoIncrement returns true if the column is marked as AUTO_INCREMENT (*).
 	IsAutoIncrement() bool
+
+	// derived from mysqlField.decimals
+	Decimals() int
 
 	// derived from mysqlField.fieldType and mysqlField.flags
 
@@ -197,6 +201,10 @@ func (f mysqlField) IsAutoIncrement() bool {
 	return f.flags&flagAutoIncrement == flagAutoIncrement
 }
 
+func (f mysqlField) Decimals() int {
+	return int(f.decimals)
+}
+
 const ( // base for reflection
 	reflect_uint8   = uint8(0)
 	reflect_uint16  = uint16(0)
@@ -320,7 +328,7 @@ func mysqlNameFor(fieldType uint8) string {
 	case fieldTypeTiny:
 		return "TINYINT"
 	case fieldTypeShort:
-		return "SHORTINT"
+		return "SMALLINT"
 	case fieldTypeInt24, fieldTypeLong:
 		return "INT"
 	case fieldTypeLongLong:
@@ -389,38 +397,42 @@ const (
 	// requires length (int > 0) in MySQL declaration
 	ParamMustLength
 	// requires no parameters or length (int > 0) and decimals (int >= 0) in MySQL declaration
-	ParamMayLengthAndDecimals
+	// OBSOLETE since decimals are contained in mysqlField...
+	// ParamMayLengthAndDecimals
+	_
 	// requires no parameters or length (int > 0) or length and decimals (int >= 0) in MySQL declaration
-	ParamMayLengthMayDecimals
-	// requires one or more parameters in MySQL declaration
-	ParamOneOrMore
+	// OBSOLETE since decimals are contained in mysqlField...
+	// ParamMayLengthMayDecimals
+	_
+	// requires valid values as parameters in MySQL declaration
+	ParamValues
 )
 
 // retrieve information about parameters used in MysqlDeclaration
 func (f mysqlField) MysqlParameters() parameterType {
 	switch f.fieldType {
-	case // temporal, *BLOB and GEOMETRY declarations have no parameters
-		fieldTypeYear, fieldTypeDate, fieldTypeNewDate, fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime,
+	case // date types, *BLOB and GEOMETRY declarations have no parameters
+		fieldTypeYear, fieldTypeDate, fieldTypeNewDate,
 		fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB,
-		fieldTypeGeometry:
+		fieldTypeGeometry,
+		// time types use decimals: microseconds
+		fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime:
 		return ParamNone
-	case // BIT, *INT* and CHAR declarations have one optional parameters (length)
+	case // BIT, *INT* and CHAR declarations have one optional parameter (length)
 		fieldTypeBit,
 		fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeLong, fieldTypeLongLong,
-		fieldTypeString:
-		return ParamMayLength
-	case // DECIMAL and NUMERIC declarations have no, one or two parameters (length, decimals)
-		fieldTypeDecimal, fieldTypeNewDecimal:
-		return ParamMayLengthMayDecimals
-	case // REAL, FLOAT and DOUBLE declarations have no or two parameters (length, decimals)
+		fieldTypeString,
+		// DECIMAL and NUMERIC declarations have one optional parameter (length) and may use decimals
+		fieldTypeDecimal, fieldTypeNewDecimal,
+		// REAL, FLOAT and DOUBLE declarations have one optional parameter (length, will also use decimals when length is given)
 		fieldTypeFloat, fieldTypeDouble:
-		return ParamMayLengthAndDecimals
+		return ParamMayLength
 	case // VARCHAR and VARBINARY declarations have one mandatory parameter (length)
 		fieldTypeVarChar, fieldTypeVarString:
 		return ParamMustLength
 	case // ENUM and SET declarations have multiple parameters
 		fieldTypeEnum, fieldTypeSet:
-		return ParamOneOrMore
+		return ParamValues
 	}
 	return ParamUnknown
 }
@@ -436,7 +448,8 @@ func (p paramErr) Error() string {
 // It does not include the name, character sets, collations, default value, keys or the attribute auto_increment.
 // For BIT, all INT types, CHAR and BINARY types, args is optional and may be one int: length.
 // For VARCHAR and VARBINARY types, args must be one int: length.
-// For DECIMAL and NUMERIC types, it should be up two ints: length and decimals (precision and scale in MySQL docs).
+// For DECIMAL and NUMERIC types, it may be none or one int: length.
+// For DATETIME, TIME, TIMESTAMP, decimals is used for microseconds.
 // For FLOAT, DOUBLE and REAL floating point types, it is optional and, when given, must be two ints: length and decimals.
 // For SETs and ENUMs, it specifies the possible values.
 // For all other types, args must be empty.
@@ -447,104 +460,74 @@ func (f mysqlField) MysqlDeclaration(args ...interface{}) (string, error) {
 		zerofill = " ZEROFILL"
 		binary   = " BINARY"
 		// errors
-		errNil                  = paramErr("can't create declaration for NULL")
-		errUnknown              = paramErr("parameter error, unknown")
-		errNone                 = paramErr("parameter error, must be none")
-		errMayLength            = paramErr("parameter error, must be none or one int (length)")
-		errMustLength           = paramErr("parameter error, must be one int (length)")
-		errMayLengthAndDecimals = paramErr("parameter error, must be none or two ints (length, decimals)")
-		errMayLengthMayDecimals = paramErr("parameter error, must be none, one int (length) or two ints (length, decimals)")
-		errEnumOrSet            = paramErr("parameter error, must be at least one entry")
+		errNil        = paramErr("can't create declaration for NULL")
+		errUnknown    = paramErr("parameter error, unknown")
+		errNone       = paramErr("parameter error, must be none")
+		errMayLength  = paramErr("parameter error, must be none or one int (length)")
+		errMustLength = paramErr("parameter error, must be one int (length)")
+		errEnumOrSet  = paramErr("parameter error, must be at least one entry")
 	)
 	// fail fast if we can't provide a declaration
 	if f.fieldType == fieldTypeNULL {
 		return "", errNil
 	}
-	// this function converts arguments to a parameter list fit for a mysql type declaration
-	// distinction is by error thrown
-	// see http://dev.mysql.com/doc/refman/5.6/en/create-table.html for create table specification
-	argsToParam := func(ptype parameterType, err error) (string, error) {
-		if ptype == ParamUnknown {
-			return "", errUnknown
-		}
-		argLen := len(args)
-		if argLen == 0 { // we don't have any arguments
-			switch ptype { // valid for these cases
-			case ParamNone, ParamMayLength, ParamMayLengthAndDecimals, ParamMayLengthMayDecimals:
-				return "", nil
-			}
-			return "", err // error otherwise
-		}
-		if ptype == ParamOneOrMore { // at least one argument, ok for set and enum
-			return fmt.Sprintf("(%v)", args...), nil // TODO: does this cover all cases?
-		}
-		if argLen > 2 { // if it's not enum or set it must not have more than two arguments
-			return "", err
-		}
-		var length, decimals int
-		var ok bool
-		if length, ok = args[0].(int); !ok || length <= 0 { // parse length (first arg)
-			return "", err // error: length must be an int > 0
-		}
-		if argLen == 2 { // we have two args
-			if decimals, ok = args[1].(int); !ok || decimals < 0 {
-				return "", err // error: decimals must be an int >= 0
-			}
-			switch ptype {
-			case ParamMayLengthAndDecimals, ParamMayLengthMayDecimals:
-				// valid result for types with (length, decimals)
-				return fmt.Sprintf("(%d,%d)", length, decimals), nil
-			}
-			return "", err // error otherwise
-		}
-		switch ptype {
-		case ParamMayLength, ParamMustLength, ParamMayLengthMayDecimals:
-			// valid result for types with (length)
-			return fmt.Sprintf("(%d)", length), nil
-		}
-		return "", err // error otherwise
-	}
 	var param, us, nn, zf, bin string
+	if f.IsNotNull() {
+		// any type may be "NOT NULL"
+		nn = notNull
+	}
 	switch f.fieldType {
-	case // numeric types may be unsigned or zerofill
-		fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeLong, fieldTypeLongLong,
-		fieldTypeFloat, fieldTypeDouble,
+	case fieldTypeFloat, fieldTypeDouble,
 		fieldTypeDecimal, fieldTypeNewDecimal:
+		if len(args) == 1 {
+			param = fmt.Sprintf("(%d,%d)", args[0], f.decimals)
+		}
+		fallthrough
+	case // numeric types may be unsigned or zerofill
+		fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeLong, fieldTypeLongLong:
 		if f.IsUnsigned() {
 			us = unsigned
 		}
 		if f.IsZerofill() {
 			zf = zerofill
 		}
+	case fieldTypeBit:
+		if len(args) != 1 {
+			return "", errMustLength
+		}
+		param = fmt.Sprintf("(%d)", args[0])
+	case fieldTypeYear, fieldTypeDate, fieldTypeNewDate,
+		fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB,
+		fieldTypeGeometry:
+		// nothing to be done for these types
 	case // only string types may be binary
-		fieldTypeVarChar, fieldTypeVarString, fieldTypeString:
+		fieldTypeVarChar, fieldTypeVarString:
 		if f.IsBinary() {
 			bin = binary
 		}
-	}
-	if f.IsNotNull() {
-		// any type may be "NOT NULL"
-		nn = notNull
-	}
-	var err error
-	switch ptype := f.MysqlParameters(); ptype {
-	case ParamNone:
-		param, err = argsToParam(ptype, errNone)
-	case ParamMayLength:
-		param, err = argsToParam(ptype, errMayLength)
-	case ParamMayLengthMayDecimals:
-		param, err = argsToParam(ptype, errMayLengthMayDecimals)
-	case ParamMayLengthAndDecimals:
-		param, err = argsToParam(ptype, errMayLengthAndDecimals)
-	case ParamMustLength:
-		param, err = argsToParam(ptype, errMustLength)
-	case ParamOneOrMore:
-		param, err = argsToParam(ptype, errEnumOrSet)
-	case ParamUnknown:
+		if len(args) != 1 {
+			return "", errMustLength
+		}
+		param = fmt.Sprintf("(%d)", args[0])
+	case fieldTypeString:
+		if f.IsBinary() {
+			bin = binary
+		}
+		if len(args) == 1 {
+			param = fmt.Sprintf("(%d)", args[0])
+		}
+	case fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime:
+		if f.decimals > 0 {
+			param = fmt.Sprintf("(%d)", f.decimals)
+		}
+
+	case fieldTypeEnum, fieldTypeSet:
+		if len(args) == 0 {
+			return "", errEnumOrSet
+		}
+		param = fmt.Sprintf("(%v)", args...)
+	default:
 		return "", errUnknown
-	}
-	if err != nil {
-		return "", err
 	}
 	return mysqlNameFor(f.fieldType) + param + bin + us + zf + nn, nil
 }
