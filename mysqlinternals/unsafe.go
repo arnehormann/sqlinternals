@@ -75,6 +75,7 @@ const (
 
 // keep mysqlRows and mysqlField in sync with structs in github.com/go-sql-driver/rows.go
 type mysqlField struct {
+	tableName string
 	name      string
 	flags     fieldFlag
 	fieldType byte
