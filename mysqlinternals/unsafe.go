@@ -15,7 +15,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/arnehormann/mirror"
 	"github.com/arnehormann/sqlinternals"
 )
 
@@ -40,7 +39,8 @@ const (
 	fieldTypeBit
 )
 const (
-	fieldTypeNewDecimal byte = iota + 0xf6
+	fieldTypeJSON byte = iota + 0xf5
+	fieldTypeNewDecimal
 	fieldTypeEnum
 	fieldTypeSet
 	fieldTypeTinyBLOB
@@ -118,6 +118,50 @@ var (
 	structsChecked bool
 )
 
+// canConvert returns true if the memory layout and the struct field names of
+// 'from' match those of 'to'.
+func canConvert(from, to reflect.Type) bool {
+	switch {
+	case from.Kind() != reflect.Struct,
+		from.Kind() != to.Kind(),
+		from.Size() != to.Size(),
+		from.Name() != to.Name(),
+		from.NumField() != to.NumField():
+		return false
+	}
+	for i, max := 0, from.NumField(); i < max; i++ {
+		sf, tf := from.Field(i), to.Field(i)
+		if sf.Name != tf.Name || sf.Offset != tf.Offset {
+			return false
+		}
+		tsf, ttf := sf.Type, tf.Type
+		for done := false; !done; {
+			k := tsf.Kind()
+			if k != ttf.Kind() {
+				return false
+			}
+			switch k {
+			case reflect.Array, reflect.Chan, reflect.Map, reflect.Ptr, reflect.Slice:
+				tsf, ttf = tsf.Elem(), ttf.Elem()
+			case reflect.Interface:
+				// don't have to handle matching interfaces here
+				if tsf != ttf {
+					// there are none in our case, so we are extra strict
+					return false
+				}
+			case reflect.Struct:
+				if tsf.Name() != ttf.Name() {
+					return false
+				}
+				done = true
+			default:
+				done = true
+			}
+		}
+	}
+	return true
+}
+
 func initOffsets(rows driver.Rows) error {
 	const (
 		errWrapperMismatch = mysqlError("unexpected structure of textRows or binaryRows")
@@ -150,7 +194,7 @@ func initOffsets(rows driver.Rows) error {
 	}
 	elemType = embedded.Type
 	// compare mysqlRows
-	if !mirror.CanConvert(elemType, reflect.TypeOf(mysqlRows{})) {
+	if !canConvert(elemType, reflect.TypeOf(mysqlRows{})) {
 		return errRowsMismatch
 	}
 	colsField, ok := elemType.FieldByName("columns")
@@ -158,7 +202,7 @@ func initOffsets(rows driver.Rows) error {
 		return errRowsMismatch
 	}
 	// compare mysqlField
-	if !mirror.CanConvert(colsField.Type.Elem(), reflect.TypeOf(mysqlField{})) {
+	if !canConvert(colsField.Type.Elem(), reflect.TypeOf(mysqlField{})) {
 		fmt.Printf("=> %#v\n\n", reflect.Zero(colsField.Type.Elem()).Interface())
 		return errFieldMismatch
 	}

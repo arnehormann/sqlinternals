@@ -286,7 +286,8 @@ func (f mysqlField) ReflectGoType() (reflect.Type, error) {
 		return typeBools, nil
 	case fieldTypeVarChar, fieldTypeVarString, fieldTypeString:
 		return typeString, nil
-	case fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB:
+	case fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB,
+		fieldTypeJSON:
 		return typeBytes, nil
 	case fieldTypeEnum, fieldTypeSet, fieldTypeGeometry, fieldTypeNULL:
 		return nil, errorTypeMismatch(f.fieldType)
@@ -381,6 +382,9 @@ func mysqlNameFor(fieldType uint8) string {
 	// --- geometry ---
 	case fieldTypeGeometry:
 		return "GEOMETRY"
+	// --- JSON ---
+	case fieldTypeJSON:
+		return "JSON"
 	}
 	return ""
 }
@@ -414,7 +418,7 @@ func (f mysqlField) MysqlParameters() parameterType {
 	case // date types, *BLOB and GEOMETRY declarations have no parameters
 		fieldTypeYear, fieldTypeDate, fieldTypeNewDate,
 		fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB,
-		fieldTypeGeometry,
+		fieldTypeGeometry, fieldTypeJSON,
 		// time types use decimals: microseconds
 		fieldTypeTime, fieldTypeTimestamp, fieldTypeDateTime:
 		return ParamNone
@@ -498,7 +502,7 @@ func (f mysqlField) MysqlDeclaration(args ...interface{}) (string, error) {
 		param = fmt.Sprintf("(%d)", args[0])
 	case fieldTypeYear, fieldTypeDate, fieldTypeNewDate,
 		fieldTypeTinyBLOB, fieldTypeMediumBLOB, fieldTypeBLOB, fieldTypeLongBLOB,
-		fieldTypeGeometry:
+		fieldTypeGeometry, fieldTypeJSON:
 		// nothing to be done for these types
 	case // only string types may be binary
 		fieldTypeVarChar, fieldTypeVarString:
