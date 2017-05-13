@@ -84,6 +84,7 @@ type mysqlField struct {
 
 type resultSet struct {
 	columns []mysqlField
+	columnNames []string
 	done    bool
 }
 
