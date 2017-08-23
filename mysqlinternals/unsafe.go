@@ -91,6 +91,7 @@ type resultSet struct {
 type mysqlRows struct {
 	mc *mysqlConn
 	rs resultSet
+	finish func()
 }
 
 type emptyRows struct{}
